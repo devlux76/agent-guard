@@ -35,6 +35,10 @@ confirmed. Agents may self-confirm, but cannot skip the saved preview or use a
 changed plan. Piped human answers are refused. There is no `--yes` override.
 `--force` does not bypass the preview or hash check. Agent confirmation replaces
 GNU per-file `-i`/`-I` prompts; humans retain their requested GNU prompts.
+Confirmation prints `CONFIRMED — deleting:` and the targets. After GNU rm
+succeeds and the targets are gone, it prints `Deleted N entries` (the confirmed
+inventory count). Failures never print a success count; retained targets are
+reported separately.
 
 Recursive `/`, HOME and its first two levels, cwd/ancestors, and paths outside
 HOME except temporary storage are refused. Git roots are refused with the

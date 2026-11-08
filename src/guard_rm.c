@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -197,13 +198,16 @@ static char *planfile(const char *hash) {
     return file;
 }
 
-static void preview(char **paths, struct Plan plan) {
-    fputs("DRY RUN — no files deleted. Resolved targets:\n",stderr);
+static void show_plan(char **paths, struct Plan plan, bool confirmed) {
+    fputs(confirmed ? "CONFIRMED — deleting:\n" :
+          "DRY RUN — no files deleted. Resolved targets:\n",stderr);
     for (char **p=paths; *p; ++p) { fputs("  ",stderr); quoted(*p); fputc('\n',stderr); }
     fprintf(stderr,"Inventory: %"PRIu64" entries; %"PRIu64" regular-file bytes\nPlan hash: %s\n",
            plan.entries,plan.bytes,plan.hash);
-    fputs("Execution needs --confirm HASH with these same arguments",stderr);
-    fputs(agent() ? ".\n" : ", then human terminal confirmation.\n",stderr);
+    if (!confirmed) {
+        fputs("Execution needs --confirm HASH with these same arguments",stderr);
+        fputs(agent() ? ".\n" : ", then human terminal confirmation.\n",stderr);
+    }
 }
 
 static bool agent(void) {
@@ -277,10 +281,10 @@ int main(int argc, char **argv) {
     }
     if (!count) { if (confirm) die("confirmed targets disappeared"); if (options&FORCE) return 0; die("no deletion targets"); }
     struct Plan plan=snapshot(paths);
-    preview(paths,plan);
     if (confirm && strcmp(confirm,plan.hash)) die("deletion plan changed; preview again");
     char *file=planfile(plan.hash);
     if (!confirm) {
+        show_plan(paths,plan,false);
         int fd=open(file,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
         if (fd<0 && errno!=EEXIST) die("cannot save preview plan");
         if (fd>=0) { if (write(fd,plan.hash,64)!=64 || close(fd)) die("cannot save preview plan"); }
@@ -320,7 +324,27 @@ int main(int argc, char **argv) {
     if (options&PRESERVE_ALL) args[a++]="--preserve-root=all";
     args[a++]="--";
     for (unsigned i=0;i<count;++i) args[a++]=paths[i];
-    fflush(stdout);
-    execv(args[0],args);
-    die("cannot execute system rm");
+    show_plan(paths,plan,true);
+    fflush(NULL);
+    pid_t child=fork();
+    if (child<0) die("cannot start system rm");
+    if (!child) {
+        execv(args[0],args);
+        die("cannot execute system rm");
+    }
+    int status;
+    while (waitpid(child,&status,0)<0) {
+        if (errno==EINTR) continue;
+        fputs("agent-guard: cannot wait for system rm; deletion outcome unknown.\n",stderr);
+        return 2;
+    }
+    if (!WIFEXITED(status)) return WIFSIGNALED(status) ? 128+WTERMSIG(status) : 2;
+    if (WEXITSTATUS(status)) return WEXITSTATUS(status);
+    bool remaining=false;
+    for (unsigned i=0;i<count;++i) {
+        if (!lstat(paths[i],&st) || (errno!=ENOENT && errno!=ENOTDIR)) remaining=true;
+    }
+    if (remaining) fputs("Deletion completed; some requested targets remain or could not be checked.\n",stderr);
+    else fprintf(stderr,"Deleted %"PRIu64" entries\n",plan.entries);
+    return 0;
 }

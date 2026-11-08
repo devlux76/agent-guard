@@ -178,6 +178,37 @@ class GuardTests(unittest.TestCase):
         self.assertEqual(self.run_rm('--confirm', digest, '-rf', self.target).returncode, 2)
         self.assertTrue(self.target.exists())
 
+    def test_confirmation_reports_execution_and_success_not_dry_run(self):
+        digest = self.plan('-rf', self.target)
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        r = self.run_rm('--confirm', digest, '-rf', self.target)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('CONFIRMED — deleting:', r.stderr)
+        self.assertIn(json.dumps(str(self.target)), r.stderr)
+        self.assertIn('Deleted 2 entries', r.stderr)
+        self.assertNotIn('DRY RUN', r.stderr)
+        self.assertNotIn('Execution needs', r.stderr)
+        self.assertFalse(self.target.exists())
+
+    def test_failed_system_rm_does_not_report_success(self):
+        digest = self.plan('-d', self.target)
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        r = self.run_rm('--confirm', digest, '-d', self.target)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('CONFIRMED — deleting:', r.stderr)
+        self.assertNotIn('Deleted ', r.stderr)
+        self.assertNotIn('DRY RUN', r.stderr)
+        self.assertTrue(self.target.exists())
+
+    def test_refused_confirmation_does_not_claim_execution(self):
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        r = self.run_rm('--confirm', '0' * 64, '-rf', self.target)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn('CONFIRMED', r.stderr)
+        self.assertNotIn('Deleted ', r.stderr)
+        self.assertTrue(self.target.exists())
+
     def test_agent_confirmation_rejects_changed_tree(self):
         digest = self.plan('-rf', self.target)
         (self.target / 'new.txt').write_text('new')
