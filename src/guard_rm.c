@@ -213,6 +213,7 @@ static bool agent(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc==2 && !strcmp(argv[1],"--internal-agent-chain")) return agent_ancestor() ? 0 : 1;
     if (getenv("AGENT_GUARD_SCOPED") && inside_script()) {
         execv("/usr/bin/rm",argv);
         die("cannot execute system rm for script cleanup");

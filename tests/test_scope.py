@@ -176,6 +176,70 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(self.file.exists())
 
+    def host_probe(self, host, *host_flags, isolate=False):
+        # Deliberately NOT a PID namespace: the launcher's script frame must
+        # remain visible beyond the version-named agent process.
+        launcher = self.cwd / 'launcher.sh'
+        launcher.write_text('#!/bin/sh\n"$@"\nresult=$?\nexit "$result"\n')
+        launcher.chmod(0o755)
+        prefix = self.isolated() if isolate else ()
+        return self.call('-f', self.file, prefix=(*prefix, str(launcher), str(host), *host_flags, '--'))
+
+    def test_version_named_agent_stops_before_launcher_using_argv0(self):
+        for name in ('claude', 'codex', 'opencode'):
+            with self.subTest(agent=name):
+                self.file.write_text('sentinel')
+                host = self.cwd / name
+                host.symlink_to(ROOT / 'build/test-agent-host')
+                r = self.host_probe(host)
+                self.assertEqual(r.returncode, 3, r.stderr)
+                self.assertTrue(self.file.exists())
+
+    def test_version_named_claude_stops_before_launcher_using_executable_path(self):
+        host = self.home / '.local/share/claude/versions/2.1.999'
+        host.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / 'build/test-agent-host', host)
+        r = self.host_probe(host)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertTrue(self.file.exists())
+
+    def test_marker_free_version_agent_is_detected_by_shim(self):
+        host = self.cwd / 'claude'
+        host.symlink_to(ROOT / 'build/test-agent-host')
+        r = self.host_probe(host, isolate=True)
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertTrue(self.file.exists())
+
+    def test_compact_python_eval_stays_gated(self):
+        r = self.command(['/usr/bin/python3', '-Sc',
+                          'import subprocess,sys;subprocess.run(["rm","-f","--",sys.argv[1]])', self.file])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
+    def test_compact_perl_eval_stays_gated(self):
+        for flags in ('-le', '-ne'):
+            with self.subTest(flags=flags):
+                self.file.write_text('sentinel')
+                r = self.command(['perl', flags,
+                                  'BEGIN { system("rm","-f","--",$ARGV[0]); exit }', self.file])
+                self.assertTrue(self.file.exists())
+                self.assertIn('Plan hash:', r.stderr)
+
+    def test_compact_node_eval_classification_without_running_node(self):
+        # Native fixture supplies node argv only; JS runtimes remain Bun-only.
+        host = self.cwd / 'node'
+        host.symlink_to(ROOT / 'build/test-agent-host')
+        r = self.command([host, '-pe', 'fixture eval code', '--',
+                          self.prefix / 'bin/rm', '-f', self.file])
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertTrue(self.file.exists())
+
+    def test_bash_process_substitution_stays_gated(self):
+        r = self.command(['bash', '-c',
+                          'bash <(printf \'rm -f -- "$1"\\n\') "$1"', 'fixture', self.file])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

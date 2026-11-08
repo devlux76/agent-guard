@@ -64,7 +64,12 @@ and the running OpenCode services already have `~/.local/bin` on PATH. Fresh
 shells find the shim there. Native parent-argv inspection keeps command-line
 pipelines (`xargs`, `find -exec`, nested shell `-c` strings) gated while rm
 inside executed shell/interpreter script files, Python modules, and build/test
-runners uses plain rm. Unknown or vanished ancestry stays gated. Existing shells can have a cached system-rm path;
+runners uses plain rm. Compact eval flags and process-substitution input stay
+gated. Agent detection uses process names, argv[0] basenames, and Claude's
+versioned executable directory, so a version-number process name does not let
+the classifier walk past the agent into its launcher script. The shim queries
+that same native detector when markers/process names do not identify the host.
+Unknown or vanished ancestry stays gated. Existing shells can have a cached system-rm path;
 run `hash -r` or open a fresh terminal/session.
 
 Unscoped noninteractive callers retain ordinary GNU rm. Package-manager,

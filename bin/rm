@@ -30,11 +30,16 @@ while [ "$pid" -gt 1 ] 2>/dev/null && [ "$hops" -lt 32 ]; do
     hops=$((hops + 1))
 done
 
+self=$(/usr/bin/readlink -f -- "$0") || exit 2
+helper="${self%/bin/rm}/libexec/guard-rm"
+# Version-named hosts need argv[0]/executable detection, shared with the classifier.
+if [ "$agent" = 0 ] && [ -x "$helper" ] && "$helper" --internal-agent-chain; then
+    guard=1
+    agent=1
+fi
 if [ "$guard" = 0 ]; then exec /usr/bin/rm "$@"; fi
 if [ "$agent" = 1 ]; then export AGENT_GUARD_ACTIVE=1; fi
 export AGENT_GUARD_SCOPED=1
-self=$(/usr/bin/readlink -f -- "$0") || exit 2
-helper="${self%/bin/rm}/libexec/guard-rm"
 if [ ! -x "$helper" ]; then
     echo 'agent-guard: native helper missing; refusing deletion.' >&2
     exit 2
