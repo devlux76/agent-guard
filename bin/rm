@@ -1,0 +1,41 @@
+#!/bin/sh
+# Scope only user/agent shells. The system binary and its normal callers stay intact.
+guard=0
+agent=0
+if [ -n "${AGENT_GUARD_ACTIVE:-}${CLAUDECODE:-}${CODEX_THREAD_ID:-}${OPENCODE:-}" ]; then
+    guard=1
+    agent=1
+fi
+if (: < /dev/tty) 2>/dev/null; then guard=1; fi
+
+# Package scripts may inherit an agent's environment. Never gate their rm calls.
+# Do not exempt every systemd descendant: user terminals/agents are descendants too.
+pid=$PPID
+hops=0
+while [ "$pid" -gt 1 ] 2>/dev/null && [ "$hops" -lt 32 ]; do
+    IFS= read -r comm < "/proc/$pid/comm" 2>/dev/null || break
+    case "$comm" in
+        apt|apt-get|dpkg|dpkg-deb|dpkg-preconfig*|mkinitramfs|update-initram*|cron|crond)
+            exec /usr/bin/rm "$@" ;;
+        codex|codex-code-mode*|claude|opencode|qoder)
+            guard=1
+            agent=1 ;;
+    esac
+    next=
+    while read -r key value rest; do
+        if [ "$key" = 'PPid:' ]; then next=$value; break; fi
+    done < "/proc/$pid/status" 2>/dev/null
+    case "$next" in ''|*[!0-9]*) break ;; esac
+    pid=$next
+    hops=$((hops + 1))
+done
+
+if [ "$guard" = 0 ]; then exec /usr/bin/rm "$@"; fi
+if [ "$agent" = 1 ]; then export AGENT_GUARD_ACTIVE=1; fi
+self=$(/usr/bin/readlink -f -- "$0") || exit 2
+helper="${self%/bin/rm}/libexec/guard-rm"
+if [ ! -x "$helper" ]; then
+    echo 'agent-guard: native helper missing; refusing deletion.' >&2
+    exit 2
+fi
+exec "$helper" "$@"
