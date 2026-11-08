@@ -32,6 +32,7 @@ done
 
 if [ "$guard" = 0 ]; then exec /usr/bin/rm "$@"; fi
 if [ "$agent" = 1 ]; then export AGENT_GUARD_ACTIVE=1; fi
+export AGENT_GUARD_SCOPED=1
 self=$(/usr/bin/readlink -f -- "$0") || exit 2
 helper="${self%/bin/rm}/libexec/guard-rm"
 if [ ! -x "$helper" ]; then

@@ -23,16 +23,18 @@ rm --confirm FULL_64_CHARACTER_HASH -rf -- ./build/generated
 ```
 
 The second command requires the same flags and targets and a previously saved
-preview. It rescans the physical tree, checks the hash, and requires typing
-`DELETE` in a controlling terminal. It rescans again after confirmation before
+preview. Agents may confirm their own inspected plans without a TTY or further
+prompt. Humans type `DELETE` in their controlling terminal. It rescans again before
 calling the unchanged system binary. File identity, size, permissions, mtime,
 ctime, tree membership, targets, and options contribute to the hash. File
 contents are not read. Size is logical regular-file bytes, not disk usage.
 
-An agent cannot authorize its own plan: agent-marked confirmation is refused.
-Piped answers and unattended confirmation are refused. Ask the operator to run
-the confirmation command in their own terminal. There is no `--yes` override.
-`--force` does not bypass the preview or approval requirement.
+Preview and refusal output goes to stderr, keeping stdout clean for scripts.
+Guarded runs prune saved plans older than one hour; an expired plan cannot be
+confirmed. Agents may self-confirm, but cannot skip the saved preview or use a
+changed plan. Piped human answers are refused. There is no `--yes` override.
+`--force` does not bypass the preview or hash check. Agent confirmation replaces
+GNU per-file `-i`/`-I` prompts; humans retain their requested GNU prompts.
 
 Recursive `/`, HOME and its first two levels, cwd/ancestors, and paths outside
 HOME except temporary storage are refused. Git roots are refused with the
@@ -59,7 +61,10 @@ Claude SessionStart PATH hook stays intact.
 The shim recognizes agent markers (`CLAUDECODE`, `CODEX_THREAD_ID`, `OPENCODE`,
 `AGENT_GUARD_ACTIVE`), agent ancestry, and a controlling user terminal. Codex
 and the running OpenCode services already have `~/.local/bin` on PATH. Fresh
-shells find the shim there. Existing shells can have a cached system-rm path;
+shells find the shim there. Native parent-argv inspection keeps command-line
+pipelines (`xargs`, `find -exec`, nested shell `-c` strings) gated while rm
+inside executed shell/interpreter script files, Python modules, and build/test
+runners uses plain rm. Unknown or vanished ancestry stays gated. Existing shells can have a cached system-rm path;
 run `hash -r` or open a fresh terminal/session.
 
 Unscoped noninteractive callers retain ordinary GNU rm. Package-manager,
@@ -74,7 +79,9 @@ This prevents accidental deletion through the scoped default command. It is
 not an OS sandbox or a defense against a malicious same-user process.
 Absolute `/usr/bin/rm`, other deletion APIs, altered PATH, unrecognized agent
 hosts and cached command paths can bypass a PATH shim. Do not bypass it from
-an agent or automatically turn a preview into confirmation. Read/inspection
-does not establish human approval. Native frontend policy is needed to enforce
-that rule against arbitrary tools. Files can still change in the small interval
+an agent. An agent must inspect the resolved plan before issuing confirmation;
+the hash proves consistency, not human authorization. Sourced code shares its
+caller's shell invocation, and erased/unknown process ancestry may conservatively
+stay gated. Script-internal calls intentionally use plain rm, so this does not
+protect against a destructive script's own logic. Files can still change in the small interval
 between the final check and system rm; no claim of adversarial race immunity.

@@ -37,8 +37,9 @@ class GuardTests(unittest.TestCase):
     def plan(self, *args):
         r = self.run_rm(*args)
         self.assertEqual(r.returncode, 3, r.stderr)
-        m = re.search(r'Plan hash: ([0-9a-f]{64})', r.stdout)
-        self.assertIsNotNone(m, r.stdout)
+        self.assertEqual(r.stdout, '')
+        m = re.search(r'Plan hash: ([0-9a-f]{64})', r.stderr)
+        self.assertIsNotNone(m, r.stderr)
         return m.group(1)
 
     def human(self, digest, answer='DELETE', after_prompt=None, env=None):
@@ -152,7 +153,7 @@ class GuardTests(unittest.TestCase):
             p.write_text('keep')
             r = self.run_rm('--', name)
             self.assertEqual(r.returncode, 3, r.stderr)
-            self.assertIn(json.dumps(str(p)), r.stdout)
+            self.assertIn(json.dumps(str(p)), r.stderr)
             self.assertTrue(p.exists())
 
     def test_unknown_options_and_root_override_fail(self):
@@ -162,10 +163,68 @@ class GuardTests(unittest.TestCase):
     def test_missing_force_target_is_noop(self):
         self.assertEqual(self.run_rm('-f', self.cwd / 'absent').returncode, 0)
 
-    def test_agent_cannot_treat_its_own_hash_as_human_approval(self):
+    def test_agent_can_confirm_its_saved_plan_without_tty(self):
         digest = self.plan('-rf', self.target)
         self.env['AGENT_GUARD_ACTIVE'] = '1'
+        r = self.run_rm('--confirm', digest, '-rf', self.target)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.target.exists())
+
+    def test_agent_confirmation_still_requires_saved_preview(self):
+        digest = self.plan('-rf', self.target)
+        record = self.home / '.local/state/agent-guard/plans' / digest
+        record.unlink()
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
         self.assertEqual(self.run_rm('--confirm', digest, '-rf', self.target).returncode, 2)
+        self.assertTrue(self.target.exists())
+
+    def test_agent_confirmation_rejects_changed_tree(self):
+        digest = self.plan('-rf', self.target)
+        (self.target / 'new.txt').write_text('new')
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        self.assertEqual(self.run_rm('--confirm', digest, '-rf', self.target).returncode, 2)
+        self.assertTrue(self.target.exists())
+
+    def test_agent_confirmation_needs_no_gnu_interactive_prompt(self):
+        digest = self.plan('-ri', self.target)
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        r = self.run_rm('--confirm', digest, '-ri', self.target)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.target.exists())
+
+    def test_preview_and_refusal_do_not_pollute_stdout(self):
+        r = self.run_rm('-rf', self.target)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('Plan hash:', r.stderr)
+        r = self.run_rm('-rf', self.home)
+        self.assertEqual(r.stdout, '')
+        self.assertIn('Protected target:', r.stderr)
+
+    def test_prunes_expired_plans_even_on_noop_runs(self):
+        digest = self.plan('-rf', self.target)
+        directory = self.home / '.local/state/agent-guard/plans'
+        old = directory / ('a' * 64)
+        old.write_text('a' * 64)
+        old.chmod(0o600)
+        os.utime(old, (time.time() - 7200, time.time() - 7200))
+        note = directory / 'keep-note'
+        note.write_text('keep')
+        os.utime(note, (time.time() - 7200, time.time() - 7200))
+        link = directory / ('b' * 64)
+        link.symlink_to(note)
+        self.assertEqual(self.run_rm('-f', self.cwd / 'absent').returncode, 0)
+        self.assertFalse(old.exists())
+        self.assertTrue((directory / digest).exists())
+        self.assertTrue(note.exists())
+        self.assertTrue(link.is_symlink())
+
+    def test_expired_approval_cannot_be_confirmed(self):
+        digest = self.plan('-rf', self.target)
+        record = self.home / '.local/state/agent-guard/plans' / digest
+        os.utime(record, (time.time() - 7200, time.time() - 7200))
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        self.assertEqual(self.run_rm('--confirm', digest, '-rf', self.target).returncode, 2)
+        self.assertFalse(record.exists())
         self.assertTrue(self.target.exists())
 
 

@@ -65,7 +65,7 @@ class ScopeTests(unittest.TestCase):
         localbin.mkdir(parents=True)
         link = localbin / 'rm'
         link.symlink_to(self.prefix / 'bin/rm')
-        r = subprocess.run([str(link), '-f', str(self.file)], cwd=self.cwd,
+        r = subprocess.run([*self.isolated(), str(link), '-f', str(self.file)], cwd=self.cwd,
                            env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
         self.assertEqual(r.returncode, 3, r.stderr)
         self.assertTrue(self.file.exists())
@@ -103,6 +103,78 @@ class ScopeTests(unittest.TestCase):
         finally:
             os.close(master)
             os.close(slave)
+
+    def command(self, args):
+        self.env['AGENT_GUARD_ACTIVE'] = '1'
+        self.env['PATH'] = f'{self.prefix}/bin:{self.env["PATH"]}'
+        return subprocess.run([*self.isolated(), *map(str, args)], cwd=self.cwd,
+                              env=self.env, stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=5)
+
+    def test_agent_xargs_pipeline_is_still_gated(self):
+        r = self.command(['sh', '-c', 'printf "%s\\0" "$1" | xargs -0 rm -f --',
+                          'fixture', self.file])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
+    def test_agent_find_exec_pipeline_is_still_gated(self):
+        r = self.command(['find', self.file, '-maxdepth', '0', '-exec', 'rm', '-f', '--', '{}', ';'])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
+    def test_shell_eval_in_agent_command_line_stays_gated(self):
+        r = self.command(['sh', '-c', 'rm -f -- "$1"', 'fixture', self.file])
+        self.assertEqual(r.returncode, 3, r.stderr)
+        self.assertTrue(self.file.exists())
+
+    def test_python_eval_in_agent_command_line_stays_gated(self):
+        r = self.command(['/usr/bin/python3', '-c',
+                          'import subprocess,sys;subprocess.run(["rm","-f","--",sys.argv[1]])', self.file])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
+    def test_bun_eval_in_agent_command_line_stays_gated(self):
+        r = self.command([shutil.which('bun'), '--eval',
+                          'await Bun.spawn(["rm","-f","--",process.argv[1]]).exited;', self.file])
+        self.assertTrue(self.file.exists())
+        self.assertIn('Plan hash:', r.stderr)
+
+    def test_executed_shell_script_cleanup_passes_through(self):
+        script = self.cwd / 'cleanup'
+        script.write_text('#!/bin/sh\nrm -f -- "$1"\nresult=$?\nexit "$result"\n')
+        script.chmod(0o755)
+        r = self.command([script, self.file])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.file.exists())
+
+    def test_make_clean_internal_rm_passes_through(self):
+        makefile = self.cwd / 'Makefile'
+        makefile.write_text('clean:\n\trm -f -- sentinel\n')
+        r = self.command(['make', 'clean'])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.file.exists())
+
+    def test_single_command_script_cleanup_passes_through(self):
+        script = self.cwd / 'cleanup.sh'
+        script.write_text('#!/bin/sh\nrm -f -- "$1"\n')
+        script.chmod(0o755)
+        r = self.command([script, self.file])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.file.exists())
+
+    def test_python_script_teardown_passes_through(self):
+        script = self.cwd / 'teardown.py'
+        script.write_text('import subprocess,sys\nsubprocess.run(["rm","-f","--",sys.argv[1]], check=True)\n')
+        r = self.command(['/usr/bin/python3', script, self.file])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.file.exists())
+
+    def test_bun_script_cleanup_passes_through(self):
+        script = self.cwd / 'cleanup.js'
+        script.write_text('const p=Bun.spawn(["rm","-f","--",process.argv[2]]);process.exit(await p.exited);\n')
+        r = self.command([shutil.which('bun'), script, self.file])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.file.exists())
 
 
 if __name__ == '__main__':
